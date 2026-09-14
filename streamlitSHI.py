@@ -1,6 +1,6 @@
 import streamlit as st
 import numpy as np
-import matplotlib.pyplot as plt
+
 
 from dataclasses import dataclass
 from math import sin, cos, radians, sqrt, atan2, degrees
