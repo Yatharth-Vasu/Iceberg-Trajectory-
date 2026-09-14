@@ -1,14 +1,12 @@
 import streamlit as st
 import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import math
 
-
-from dataclasses import dataclass
-from math import sin, cos, radians, sqrt, atan2, degrees
-
-
-# ============================================================
+# ---------------------------------------------------------
 # PAGE CONFIGURATION
-# ============================================================
+# ---------------------------------------------------------
 
 st.set_page_config(
     page_title="Iceberg Trajectory Simulator",
@@ -16,1253 +14,862 @@ st.set_page_config(
     layout="wide"
 )
 
+st.title("🧊 Iceberg Trajectory Monitoring & Simulation System")
 
-# ============================================================
-# TITLE
-# ============================================================
-
-st.title("🧊 Iceberg Trajectory Simulator")
-
-st.markdown(
+st.write(
     """
-    ### 2D Horizontal Ocean Motion Simulator
-
-    This simulation calculates iceberg motion using:
-
-    - 🌊 Ocean current
-    - 🌬️ Wind force
-    - 💧 Water drag
-    - 🌍 Coriolis force
-    - ⚖️ Mass and buoyancy
-    - 🔢 RK4 numerical integration
+    This application calculates the motion of an iceberg using a simplified
+    2D force-balance model. Enter the physical and environmental parameters
+    below to calculate the iceberg's trajectory, final coordinates, velocity,
+    forces and direction.
     """
 )
 
-
-# ============================================================
-# ICEBERG CLASS
-# ============================================================
-
-@dataclass
-class Iceberg:
-
-    # Geometry
-    length: float
-    width: float
-    height: float
-
-    # Material properties
-    ice_density: float
-    water_density: float
-    air_density: float
-
-    # Drag coefficients
-    water_drag_coefficient: float
-    wind_drag_coefficient: float
-
-    # Areas
-    exposed_area: float
-    underwater_area: float
-
-    # Wind
-    wind_speed: float
-    wind_direction: float
-
-    # Ocean current
-    current_speed: float
-    current_direction: float
-
-    # Latitude
-    latitude: float
-
-    # Initial conditions
-    x0: float
-    y0: float
-    vx0: float
-    vy0: float
-
-    # Simulation
-    total_time: float
-    dt: float
-
-    # --------------------------------------------------------
-    # Volume
-    # --------------------------------------------------------
-
-    @property
-    def volume(self):
-        return self.length * self.width * self.height
-
-    # --------------------------------------------------------
-    # Mass
-    # --------------------------------------------------------
-
-    @property
-    def mass(self):
-        return self.ice_density * self.volume
-
-    # --------------------------------------------------------
-    # Submerged Volume
-    # --------------------------------------------------------
-
-    @property
-    def submerged_volume(self):
-        return (
-            self.ice_density
-            / self.water_density
-            * self.volume
-        )
-
-    # --------------------------------------------------------
-    # Submerged Fraction
-    # --------------------------------------------------------
-
-    @property
-    def submerged_fraction(self):
-        return self.submerged_volume / self.volume
-
-    # --------------------------------------------------------
-    # Weight
-    # --------------------------------------------------------
-
-    @property
-    def weight(self):
-        return self.mass * 9.81
-
-    # --------------------------------------------------------
-    # Buoyant Force
-    # --------------------------------------------------------
-
-    @property
-    def buoyant_force(self):
-        return (
-            self.water_density
-            * 9.81
-            * self.submerged_volume
-        )
-
-
-# ============================================================
-# VELOCITY VECTOR
-# ============================================================
-
-def velocity_vector(speed, direction_deg):
-
-    angle = radians(direction_deg)
-
-    return np.array([
-        speed * cos(angle),
-        speed * sin(angle)
-    ])
-
-
-# ============================================================
-# FORCE CALCULATION
-# ============================================================
-
-def calculate_forces(state, iceberg):
-
-    x, y, vx, vy = state
-
-    mass = iceberg.mass
-
-    iceberg_velocity = np.array([vx, vy])
-
-    # ========================================================
-    # GRAVITY
-    # ========================================================
-
-    gravity = np.array([0.0, 0.0])
-
-    # Vertical gravity is balanced by buoyancy.
-    # Only horizontal motion is simulated.
-
-
-    # ========================================================
-    # BUOYANCY
-    # ========================================================
-
-    buoyancy = np.array([0.0, 0.0])
-
-
-    # ========================================================
-    # OCEAN CURRENT
-    # ========================================================
-
-    current_velocity = velocity_vector(
-        iceberg.current_speed,
-        iceberg.current_direction
-    )
-
-    relative_water_velocity = (
-        iceberg_velocity - current_velocity
-    )
-
-    relative_water_speed = np.linalg.norm(
-        relative_water_velocity
-    )
-
-
-    # ========================================================
-    # WATER DRAG
-    # ========================================================
-
-    if relative_water_speed > 0:
-
-        water_drag = (
-            -0.5
-            * iceberg.water_density
-            * iceberg.water_drag_coefficient
-            * iceberg.underwater_area
-            * relative_water_speed
-            * relative_water_velocity
-        )
-
-    else:
-
-        water_drag = np.zeros(2)
-
-
-    # ========================================================
-    # WIND FORCE
-    # ========================================================
-
-    wind_velocity = velocity_vector(
-        iceberg.wind_speed,
-        iceberg.wind_direction
-    )
-
-    relative_wind_velocity = (
-        wind_velocity - iceberg_velocity
-    )
-
-    relative_wind_speed = np.linalg.norm(
-        relative_wind_velocity
-    )
-
-    if relative_wind_speed > 0:
-
-        wind_force = (
-            0.5
-            * iceberg.air_density
-            * iceberg.wind_drag_coefficient
-            * iceberg.exposed_area
-            * relative_wind_speed
-            * relative_wind_velocity
-        )
-
-    else:
-
-        wind_force = np.zeros(2)
-
-
-    # ========================================================
-    # CORIOLIS FORCE
-    # ========================================================
-
-    omega = 7.2921159e-5
-
-    latitude_rad = radians(
-        iceberg.latitude
-    )
-
-    f = 2 * omega * sin(latitude_rad)
-
-    coriolis_force = np.array([
-        mass * f * vy,
-        -mass * f * vx
-    ])
-
-
-    # ========================================================
-    # TOTAL HORIZONTAL FORCE
-    # ========================================================
-
-    total_force = (
-        water_drag
-        + wind_force
-        + coriolis_force
-    )
-
-    return total_force, {
-        "gravity": gravity,
-        "buoyancy": buoyancy,
-        "water_drag": water_drag,
-        "wind_force": wind_force,
-        "coriolis_force": coriolis_force,
-        "total_force": total_force
-    }
-
-
-# ============================================================
-# DIFFERENTIAL EQUATIONS
-# ============================================================
-
-def derivatives(state, iceberg):
-
-    x, y, vx, vy = state
-
-    total_force, forces = calculate_forces(
-        state,
-        iceberg
-    )
-
-    acceleration = (
-        total_force / iceberg.mass
-    )
-
-    return np.array([
-        vx,
-        vy,
-        acceleration[0],
-        acceleration[1]
-    ])
-
-
-# ============================================================
-# RK4 NUMERICAL INTEGRATION
-# ============================================================
-
-def rk4_step(state, dt, iceberg):
-
-    k1 = derivatives(
-        state,
-        iceberg
-    )
-
-    k2 = derivatives(
-        state + 0.5 * dt * k1,
-        iceberg
-    )
-
-    k3 = derivatives(
-        state + 0.5 * dt * k2,
-        iceberg
-    )
-
-    k4 = derivatives(
-        state + dt * k3,
-        iceberg
-    )
-
-    return state + (
-        dt / 6.0
-        * (
-            k1
-            + 2 * k2
-            + 2 * k3
-            + k4
-        )
-    )
-
-
-# ============================================================
-# SIMULATION
-# ============================================================
-
-def simulate(iceberg):
-
-    state = np.array([
-        iceberg.x0,
-        iceberg.y0,
-        iceberg.vx0,
-        iceberg.vy0
-    ], dtype=float)
-
-    times = [0.0]
-
-    states = [state.copy()]
-
-    force_history = []
-
-    # Number of simulation steps
-    number_of_steps = int(
-        np.ceil(
-            iceberg.total_time / iceberg.dt
-        )
-    )
-
-    for step in range(number_of_steps):
-
-        # Remaining simulation time
-        remaining_time = (
-            iceberg.total_time
-            - times[-1]
-        )
-
-        if remaining_time <= 0:
-            break
-
-        # Prevent going beyond total_time
-        step_dt = min(
-            iceberg.dt,
-            remaining_time
-        )
-
-        # Calculate forces
-        total_force, forces = calculate_forces(
-            state,
-            iceberg
-        )
-
-        force_history.append(
-            forces
-        )
-
-        # RK4 integration
-        state = rk4_step(
-            state,
-            step_dt,
-            iceberg
-        )
-
-        # Update time
-        new_time = (
-            times[-1]
-            + step_dt
-        )
-
-        times.append(new_time)
-
-        states.append(
-            state.copy()
-        )
-
-    return (
-        np.array(times),
-        np.array(states),
-        force_history
-    )
-
-
-# ============================================================
-# SIDEBAR
-# ============================================================
-
-st.sidebar.title("🧊 Iceberg Parameters")
-
-
-# ============================================================
-# GEOMETRY
-# ============================================================
-
-st.sidebar.subheader("📐 Geometry")
-
-length = st.sidebar.number_input(
-    "Length (m)",
-    min_value=0.01,
-    value=10.0,
-    step=1.0
+# ---------------------------------------------------------
+# SIDEBAR INPUTS
+# ---------------------------------------------------------
+
+st.sidebar.header("📍 Initial Position")
+
+x0 = st.sidebar.number_input(
+    "Initial X coordinate (m)",
+    value=0.0
 )
 
-width = st.sidebar.number_input(
-    "Width (m)",
-    min_value=0.01,
-    value=10.0,
-    step=1.0
+y0 = st.sidebar.number_input(
+    "Initial Y coordinate (m)",
+    value=0.0
 )
 
-height = st.sidebar.number_input(
-    "Height (m)",
-    min_value=0.01,
-    value=10.0,
-    step=1.0
+st.sidebar.header("🧊 Iceberg Properties")
+
+mass = st.sidebar.number_input(
+    "Iceberg mass (kg)",
+    min_value=1.0,
+    value=100000.0
 )
-
-
-# ============================================================
-# MATERIAL
-# ============================================================
-
-st.sidebar.subheader("⚗️ Material")
 
 ice_density = st.sidebar.number_input(
     "Ice density (kg/m³)",
-    min_value=0.01,
-    value=917.0,
-    step=1.0
+    min_value=1.0,
+    value=917.0
 )
+
+iceberg_height = st.sidebar.number_input(
+    "Iceberg height (m)",
+    min_value=0.1,
+    value=10.0
+)
+
+iceberg_width = st.sidebar.number_input(
+    "Iceberg width (m)",
+    min_value=0.1,
+    value=10.0
+)
+
+iceberg_length = st.sidebar.number_input(
+    "Iceberg length (m)",
+    min_value=0.1,
+    value=10.0
+)
+
+st.sidebar.header("🌊 Water Properties")
 
 water_density = st.sidebar.number_input(
     "Water density (kg/m³)",
-    min_value=0.01,
-    value=1025.0,
-    step=1.0
+    min_value=1.0,
+    value=1025.0
 )
 
-air_density = st.sidebar.number_input(
-    "Air density (kg/m³)",
-    min_value=0.01,
-    value=1.225,
-    step=0.01
+water_current_speed = st.sidebar.number_input(
+    "Water current speed (m/s)",
+    min_value=0.0,
+    value=0.5
 )
 
+water_current_direction = st.sidebar.number_input(
+    "Water current direction (degrees)",
+    min_value=0.0,
+    max_value=360.0,
+    value=0.0,
+    help="0° = +X direction, 90° = +Y direction"
+)
 
-# ============================================================
-# DRAG COEFFICIENTS
-# ============================================================
-
-st.sidebar.subheader("💨 Drag Coefficients")
-
-water_cd = st.sidebar.number_input(
+water_drag_coefficient = st.sidebar.number_input(
     "Water drag coefficient",
-    min_value=0.0,
-    value=1.0,
-    step=0.1
-)
-
-wind_cd = st.sidebar.number_input(
-    "Wind drag coefficient",
-    min_value=0.0,
-    value=1.0,
-    step=0.1
-)
-
-
-# ============================================================
-# AREAS
-# ============================================================
-
-st.sidebar.subheader("📏 Areas")
-
-exposed_area = st.sidebar.number_input(
-    "Exposed frontal area (m²)",
     min_value=0.01,
-    value=100.0,
-    step=1.0
+    value=1.0
 )
 
-underwater_area = st.sidebar.number_input(
-    "Underwater frontal area (m²)",
-    min_value=0.01,
-    value=100.0,
-    step=1.0
-)
-
-
-# ============================================================
-# WIND
-# ============================================================
-
-st.sidebar.subheader("🌬️ Wind")
+st.sidebar.header("💨 Wind Properties")
 
 wind_speed = st.sidebar.number_input(
     "Wind speed (m/s)",
     min_value=0.0,
-    value=5.0,
-    step=0.5
+    value=5.0
 )
 
 wind_direction = st.sidebar.number_input(
     "Wind direction (degrees)",
     min_value=0.0,
     max_value=360.0,
-    value=0.0,
-    step=5.0
+    value=0.0
 )
 
+air_density = st.sidebar.number_input(
+    "Air density (kg/m³)",
+    min_value=0.01,
+    value=1.225
+)
 
-# ============================================================
-# OCEAN CURRENT
-# ============================================================
+air_drag_coefficient = st.sidebar.number_input(
+    "Air drag coefficient",
+    min_value=0.01,
+    value=1.0
+)
 
-st.sidebar.subheader("🌊 Ocean Current")
+st.sidebar.header("🚀 Initial Velocity")
 
-current_speed = st.sidebar.number_input(
-    "Current speed (m/s)",
+initial_speed = st.sidebar.number_input(
+    "Initial iceberg speed (m/s)",
     min_value=0.0,
-    value=1.0,
-    step=0.1
+    value=0.0
 )
 
-current_direction = st.sidebar.number_input(
-    "Current direction (degrees)",
+initial_direction = st.sidebar.number_input(
+    "Initial iceberg direction (degrees)",
     min_value=0.0,
     max_value=360.0,
-    value=0.0,
-    step=5.0
+    value=0.0
 )
 
+st.sidebar.header("⏱️ Simulation")
 
-# ============================================================
-# LATITUDE
-# ============================================================
-
-st.sidebar.subheader("🌍 Location")
-
-latitude = st.sidebar.number_input(
-    "Latitude (degrees)",
-    min_value=-90.0,
-    max_value=90.0,
-    value=20.0,
-    step=1.0
+simulation_time = st.sidebar.number_input(
+    "Simulation time (seconds)",
+    min_value=1.0,
+    value=600.0
 )
 
-
-# ============================================================
-# INITIAL POSITION
-# ============================================================
-
-st.sidebar.subheader("📍 Initial Position")
-
-x0 = st.sidebar.number_input(
-    "Initial X (m)",
-    value=0.0,
-    step=1.0
-)
-
-y0 = st.sidebar.number_input(
-    "Initial Y (m)",
-    value=0.0,
-    step=1.0
-)
-
-
-# ============================================================
-# INITIAL VELOCITY
-# ============================================================
-
-st.sidebar.subheader("🚀 Initial Velocity")
-
-vx0 = st.sidebar.number_input(
-    "Initial Vx (m/s)",
-    value=0.0,
-    step=0.1
-)
-
-vy0 = st.sidebar.number_input(
-    "Initial Vy (m/s)",
-    value=0.0,
-    step=0.1
-)
-
-
-# ============================================================
-# SIMULATION PARAMETERS
-# ============================================================
-
-st.sidebar.subheader("⏱️ Simulation")
-
-total_time = st.sidebar.number_input(
-    "Total simulation time (s)",
+time_step = st.sidebar.number_input(
+    "Time step Δt (seconds)",
     min_value=0.01,
-    value=100.0,
-    step=10.0
+    value=1.0
 )
 
-dt = st.sidebar.number_input(
-    "Time step dt (s)",
-    min_value=0.0001,
-    value=1.0,
-    step=0.1
+# ---------------------------------------------------------
+# CONSTANTS
+# ---------------------------------------------------------
+
+g = 9.81
+
+# ---------------------------------------------------------
+# CALCULATIONS
+# ---------------------------------------------------------
+
+# Iceberg volume
+volume = mass / ice_density
+
+# Approximate submerged volume from Archimedes principle
+submerged_volume = mass / water_density
+
+# Percentage submerged
+submerged_percentage = (
+    submerged_volume / volume
+) * 100
+
+# Above-water volume
+above_water_volume = volume - submerged_volume
+
+# Iceberg cross-sectional areas
+water_area = iceberg_width * iceberg_height
+air_area = iceberg_width * iceberg_height
+
+# Weight
+weight = mass * g
+
+# Buoyant force
+buoyant_force = water_density * g * submerged_volume
+
+# Convert angles to radians
+water_angle_rad = math.radians(water_current_direction)
+wind_angle_rad = math.radians(wind_direction)
+initial_angle_rad = math.radians(initial_direction)
+
+# Water velocity vector
+water_vx = water_current_speed * math.cos(water_angle_rad)
+water_vy = water_current_speed * math.sin(water_angle_rad)
+
+# Wind velocity vector
+wind_vx = wind_speed * math.cos(wind_angle_rad)
+wind_vy = wind_speed * math.sin(wind_angle_rad)
+
+# Initial iceberg velocity
+vx_initial = initial_speed * math.cos(initial_angle_rad)
+vy_initial = initial_speed * math.sin(initial_angle_rad)
+
+# ---------------------------------------------------------
+# DISPLAY BASIC ICEBERG PARAMETERS
+# ---------------------------------------------------------
+
+st.subheader("🧊 Iceberg Parameters")
+
+col1, col2, col3, col4 = st.columns(4)
+
+col1.metric(
+    "Mass",
+    f"{mass:,.2f} kg"
 )
 
-
-# ============================================================
-# SIMULATION SIZE CHECK
-# ============================================================
-
-estimated_steps = int(
-    np.ceil(total_time / dt)
+col2.metric(
+    "Ice Density",
+    f"{ice_density:,.2f} kg/m³"
 )
 
-if estimated_steps > 200000:
+col3.metric(
+    "Total Volume",
+    f"{volume:,.2f} m³"
+)
 
-    st.sidebar.error(
-        "Simulation is too large. "
-        "Increase dt or reduce total time."
+col4.metric(
+    "Submerged Volume",
+    f"{submerged_volume:,.2f} m³"
+)
+
+col1, col2, col3, col4 = st.columns(4)
+
+col1.metric(
+    "Above-water Volume",
+    f"{above_water_volume:,.2f} m³"
+)
+
+col2.metric(
+    "Submerged %",
+    f"{submerged_percentage:.2f}%"
+)
+
+col3.metric(
+    "Weight",
+    f"{weight:,.2f} N"
+)
+
+col4.metric(
+    "Buoyant Force",
+    f"{buoyant_force:,.2f} N"
+)
+
+# ---------------------------------------------------------
+# FORCE EXPLANATION
+# ---------------------------------------------------------
+
+st.subheader("⚙️ Physics Model")
+
+st.markdown(
+    f"""
+### 1. Iceberg volume
+
+$$
+V = \\frac{{m}}{{\\rho_{{ice}}}}
+$$
+
+$$
+V = \\frac{{{mass:,.2f}}}{{{ice_density:,.2f}}}
+= {volume:,.2f}\\ m^3
+$$
+
+### 2. Submerged volume
+
+For a floating iceberg:
+
+$$
+F_B = mg
+$$
+
+and
+
+$$
+F_B = \\rho_w g V_{{submerged}}
+$$
+
+Therefore:
+
+$$
+V_{{submerged}} =
+\\frac{{m}}{{\\rho_w}}
+$$
+
+### 3. Weight
+
+$$
+F_g = mg
+$$
+
+### 4. Water drag
+
+$$
+F_{{water}} =
+\\frac12 C_d \\rho_w A
+|\\vec{{v}}_w-\\vec{{v}}|
+(\\vec{{v}}_w-\\vec{{v}})
+$$
+
+### 5. Wind drag
+
+$$
+F_{{wind}} =
+\\frac12 C_d \\rho_a A
+|\\vec{{v}}_{{wind}}-\\vec{{v}}|
+(\\vec{{v}}_{{wind}}-\\vec{{v}})
+$$
+
+### 6. Net horizontal force
+
+$$
+\\vec{{F}}_{{net}}
+=
+\\vec{{F}}_{{water}}
++
+\\vec{{F}}_{{wind}}
+$$
+
+### 7. Acceleration
+
+$$
+\\vec{{a}} =
+\\frac{{\\vec{{F}}_{{net}}}}{{m}}
+$$
+"""
+)
+
+# ---------------------------------------------------------
+# SIMULATION
+# ---------------------------------------------------------
+
+num_steps = int(simulation_time / time_step) + 1
+
+times = np.zeros(num_steps)
+
+x = np.zeros(num_steps)
+y = np.zeros(num_steps)
+
+vx = np.zeros(num_steps)
+vy = np.zeros(num_steps)
+
+ax = np.zeros(num_steps)
+ay = np.zeros(num_steps)
+
+water_fx = np.zeros(num_steps)
+water_fy = np.zeros(num_steps)
+
+wind_fx = np.zeros(num_steps)
+wind_fy = np.zeros(num_steps)
+
+net_fx = np.zeros(num_steps)
+net_fy = np.zeros(num_steps)
+
+speed = np.zeros(num_steps)
+
+# Initial conditions
+x[0] = x0
+y[0] = y0
+
+vx[0] = vx_initial
+vy[0] = vy_initial
+
+# ---------------------------------------------------------
+# TIME INTEGRATION
+# ---------------------------------------------------------
+
+for i in range(num_steps - 1):
+
+    # -----------------------------------------------------
+    # RELATIVE WATER VELOCITY
+    # -----------------------------------------------------
+
+    relative_water_vx = water_vx - vx[i]
+    relative_water_vy = water_vy - vy[i]
+
+    relative_water_speed = math.sqrt(
+        relative_water_vx**2 +
+        relative_water_vy**2
     )
 
-    st.stop()
+    # -----------------------------------------------------
+    # WATER DRAG FORCE
+    # -----------------------------------------------------
 
+    if relative_water_speed > 0:
 
-# ============================================================
-# PHYSICAL CHECK
-# ============================================================
+        water_fx[i] = (
+            0.5
+            * water_drag_coefficient
+            * water_density
+            * water_area
+            * relative_water_speed
+            * relative_water_vx
+        )
 
-if water_density <= ice_density:
+        water_fy[i] = (
+            0.5
+            * water_drag_coefficient
+            * water_density
+            * water_area
+            * relative_water_speed
+            * relative_water_vy
+        )
 
-    st.warning(
-        "⚠️ Water density is not greater than ice density. "
-        "Check your physical parameters."
+    # -----------------------------------------------------
+    # RELATIVE WIND VELOCITY
+    # -----------------------------------------------------
+
+    relative_wind_vx = wind_vx - vx[i]
+    relative_wind_vy = wind_vy - vy[i]
+
+    relative_wind_speed = math.sqrt(
+        relative_wind_vx**2 +
+        relative_wind_vy**2
     )
 
+    # -----------------------------------------------------
+    # WIND DRAG FORCE
+    # -----------------------------------------------------
 
-# ============================================================
-# CREATE ICEBERG
-# ============================================================
+    if relative_wind_speed > 0:
 
-iceberg = Iceberg(
+        wind_fx[i] = (
+            0.5
+            * air_drag_coefficient
+            * air_density
+            * air_area
+            * relative_wind_speed
+            * relative_wind_vx
+        )
 
-    length=length,
-    width=width,
-    height=height,
+        wind_fy[i] = (
+            0.5
+            * air_drag_coefficient
+            * air_density
+            * air_area
+            * relative_wind_speed
+            * relative_wind_vy
+        )
 
-    ice_density=ice_density,
-    water_density=water_density,
-    air_density=air_density,
+    # -----------------------------------------------------
+    # NET FORCE
+    # -----------------------------------------------------
 
-    water_drag_coefficient=water_cd,
-    wind_drag_coefficient=wind_cd,
+    net_fx[i] = water_fx[i] + wind_fx[i]
+    net_fy[i] = water_fy[i] + wind_fy[i]
 
-    exposed_area=exposed_area,
-    underwater_area=underwater_area,
+    # -----------------------------------------------------
+    # ACCELERATION
+    # -----------------------------------------------------
 
-    wind_speed=wind_speed,
-    wind_direction=wind_direction,
+    ax[i] = net_fx[i] / mass
+    ay[i] = net_fy[i] / mass
 
-    current_speed=current_speed,
-    current_direction=current_direction,
+    # -----------------------------------------------------
+    # UPDATE VELOCITY
+    # -----------------------------------------------------
 
-    latitude=latitude,
+    vx[i + 1] = vx[i] + ax[i] * time_step
+    vy[i + 1] = vy[i] + ay[i] * time_step
 
-    x0=x0,
-    y0=y0,
+    # -----------------------------------------------------
+    # UPDATE POSITION
+    # -----------------------------------------------------
 
-    vx0=vx0,
-    vy0=vy0,
+    x[i + 1] = x[i] + vx[i + 1] * time_step
+    y[i + 1] = y[i] + vy[i + 1] * time_step
 
-    total_time=total_time,
-    dt=dt
+    times[i + 1] = times[i] + time_step
+
+    # -----------------------------------------------------
+    # SPEED
+    # -----------------------------------------------------
+
+    speed[i + 1] = math.sqrt(
+        vx[i + 1]**2 +
+        vy[i + 1]**2
+    )
+
+# Calculate final forces
+water_fx[-1] = water_fx[-2]
+water_fy[-1] = water_fy[-2]
+
+wind_fx[-1] = wind_fx[-2]
+wind_fy[-1] = wind_fy[-2]
+
+net_fx[-1] = water_fx[-1] + wind_fx[-1]
+net_fy[-1] = water_fy[-1] + wind_fy[-1]
+
+ax[-1] = net_fx[-1] / mass
+ay[-1] = net_fy[-1] / mass
+
+speed[0] = math.sqrt(
+    vx[0]**2 + vy[0]**2
 )
 
+# ---------------------------------------------------------
+# FINAL RESULTS
+# ---------------------------------------------------------
 
-# ============================================================
-# RUN BUTTON
-# ============================================================
+final_x = x[-1]
+final_y = y[-1]
 
-run_simulation = st.sidebar.button(
-    "🚀 Run Simulation",
+final_vx = vx[-1]
+final_vy = vy[-1]
+
+final_speed = math.sqrt(
+    final_vx**2 + final_vy**2
+)
+
+displacement_x = final_x - x0
+displacement_y = final_y - y0
+
+total_displacement = math.sqrt(
+    displacement_x**2 +
+    displacement_y**2
+)
+
+# Direction of final displacement
+direction = math.degrees(
+    math.atan2(displacement_y, displacement_x)
+)
+
+if direction < 0:
+    direction += 360
+
+# Final velocity direction
+velocity_direction = math.degrees(
+    math.atan2(final_vy, final_vx)
+)
+
+if velocity_direction < 0:
+    velocity_direction += 360
+
+# ---------------------------------------------------------
+# RESULT DISPLAY
+# ---------------------------------------------------------
+
+st.subheader("🎯 Final Trajectory Results")
+
+c1, c2, c3, c4 = st.columns(4)
+
+c1.metric(
+    "Final X",
+    f"{final_x:,.2f} m"
+)
+
+c2.metric(
+    "Final Y",
+    f"{final_y:,.2f} m"
+)
+
+c3.metric(
+    "Displacement",
+    f"{total_displacement:,.2f} m"
+)
+
+c4.metric(
+    "Final Speed",
+    f"{final_speed:,.3f} m/s"
+)
+
+c1, c2, c3 = st.columns(3)
+
+c1.metric(
+    "Travel Direction",
+    f"{direction:.2f}°"
+)
+
+c2.metric(
+    "Final Velocity Direction",
+    f"{velocity_direction:.2f}°"
+)
+
+c3.metric(
+    "Simulation Time",
+    f"{simulation_time:,.1f} s"
+)
+
+# ---------------------------------------------------------
+# DIRECTION DESCRIPTION
+# ---------------------------------------------------------
+
+def direction_name(angle):
+
+    directions = [
+        "East",
+        "North-East",
+        "North",
+        "North-West",
+        "West",
+        "South-West",
+        "South",
+        "South-East"
+    ]
+
+    index = int(
+        ((angle + 22.5) % 360) / 45
+    )
+
+    return directions[index]
+
+
+st.success(
+    f"""
+    🧭 The iceberg travels approximately **{direction:.2f}°**
+    ({direction_name(direction)}).
+
+    Final position:
+    **({final_x:.2f} m, {final_y:.2f} m)**
+
+    Total displacement:
+    **{total_displacement:.2f} m**
+    """
+)
+
+# ---------------------------------------------------------
+# TRAJECTORY VISUALIZATION
+# ---------------------------------------------------------
+
+st.subheader("🗺️ Iceberg Trajectory")
+
+fig, ax_plot = plt.subplots(figsize=(12, 7))
+
+ax_plot.plot(
+    x,
+    y,
+    linewidth=2,
+    label="Iceberg trajectory"
+)
+
+# Initial position
+ax_plot.scatter(
+    x[0],
+    y[0],
+    s=100,
+    marker="o",
+    label="Initial position"
+)
+
+# Final position
+ax_plot.scatter(
+    x[-1],
+    y[-1],
+    s=150,
+    marker="X",
+    label="Final position"
+)
+
+# Direction arrow
+arrow_index = max(
+    1,
+    int(len(x) * 0.75)
+)
+
+dx_arrow = x[arrow_index] - x[arrow_index - 1]
+dy_arrow = y[arrow_index] - y[arrow_index - 1]
+
+ax_plot.arrow(
+    x[arrow_index - 1],
+    y[arrow_index - 1],
+    dx_arrow,
+    dy_arrow,
+    head_width=max(total_displacement * 0.02, 1),
+    head_length=max(total_displacement * 0.03, 1),
+    length_includes_head=True
+)
+
+ax_plot.set_xlabel("X Position (m)")
+ax_plot.set_ylabel("Y Position (m)")
+ax_plot.set_title("Simulated Iceberg Trajectory")
+
+ax_plot.grid(True)
+ax_plot.legend()
+
+ax_plot.set_aspect("equal", adjustable="datalim")
+
+st.pyplot(fig)
+
+# ---------------------------------------------------------
+# VELOCITY GRAPH
+# ---------------------------------------------------------
+
+st.subheader("🚀 Iceberg Speed vs Time")
+
+fig2, ax2 = plt.subplots(figsize=(12, 5))
+
+ax2.plot(
+    times,
+    speed,
+    linewidth=2
+)
+
+ax2.set_xlabel("Time (s)")
+ax2.set_ylabel("Speed (m/s)")
+ax2.set_title("Iceberg Speed vs Time")
+
+ax2.grid(True)
+
+st.pyplot(fig2)
+
+# ---------------------------------------------------------
+# FORCE GRAPH
+# ---------------------------------------------------------
+
+st.subheader("⚙️ Forces vs Time")
+
+fig3, ax3 = plt.subplots(figsize=(12, 5))
+
+water_force_magnitude = np.sqrt(
+    water_fx**2 +
+    water_fy**2
+)
+
+wind_force_magnitude = np.sqrt(
+    wind_fx**2 +
+    wind_fy**2
+)
+
+net_force_magnitude = np.sqrt(
+    net_fx**2 +
+    net_fy**2
+)
+
+ax3.plot(
+    times,
+    water_force_magnitude,
+    label="Water drag"
+)
+
+ax3.plot(
+    times,
+    wind_force_magnitude,
+    label="Wind drag"
+)
+
+ax3.plot(
+    times,
+    net_force_magnitude,
+    label="Net force"
+)
+
+ax3.set_xlabel("Time (s)")
+ax3.set_ylabel("Force (N)")
+ax3.set_title("Iceberg Forces vs Time")
+
+ax3.grid(True)
+ax3.legend()
+
+st.pyplot(fig3)
+
+# ---------------------------------------------------------
+# DATA TABLE
+# ---------------------------------------------------------
+
+st.subheader("📊 Simulation Data")
+
+data = pd.DataFrame({
+    "Time (s)": times,
+    "X (m)": x,
+    "Y (m)": y,
+    "Vx (m/s)": vx,
+    "Vy (m/s)": vy,
+    "Speed (m/s)": speed,
+    "Ax (m/s²)": ax,
+    "Ay (m/s²)": ay,
+    "Water Fx (N)": water_fx,
+    "Water Fy (N)": water_fy,
+    "Wind Fx (N)": wind_fx,
+    "Wind Fy (N)": wind_fy,
+    "Net Fx (N)": net_fx,
+    "Net Fy (N)": net_fy
+})
+
+st.dataframe(
+    data,
     use_container_width=True
 )
 
+# ---------------------------------------------------------
+# DOWNLOAD CSV
+# ---------------------------------------------------------
 
-# ============================================================
-# RUN SIMULATION
-# ============================================================
+csv = data.to_csv(index=False)
 
-if run_simulation:
+st.download_button(
+    label="⬇️ Download Simulation Data (CSV)",
+    data=csv,
+    file_name="iceberg_trajectory.csv",
+    mime="text/csv"
+)
 
-    with st.spinner(
-        "Calculating iceberg trajectory..."
-    ):
+# ---------------------------------------------------------
+# FORMULA SUMMARY
+# ---------------------------------------------------------
 
-        times, states, force_history = simulate(
-            iceberg
-        )
+st.subheader("📐 Formula Summary")
 
+st.markdown(
+    """
+### Iceberg volume
 
-    # ========================================================
-    # FINAL STATE
-    # ========================================================
+`V = m / ρ_ice`
 
-    final_state = states[-1]
+### Submerged volume
 
-    final_x = final_state[0]
+`V_sub = m / ρ_water`
 
-    final_y = final_state[1]
+### Weight
 
-    final_vx = final_state[2]
+`Fg = m × g`
 
-    final_vy = final_state[3]
+### Buoyant force
 
+`Fb = ρ_water × g × V_sub`
 
-    # ========================================================
-    # FINAL SPEED
-    # ========================================================
+### Water drag
 
-    final_speed = sqrt(
-        final_vx**2
-        + final_vy**2
-    )
+`F_water = ½ × Cd × ρ_water × A × |Vwater - Vice| × (Vwater - Vice)`
 
+### Wind drag
 
-    # ========================================================
-    # FINAL DIRECTION
-    # ========================================================
+`F_wind = ½ × Cd × ρ_air × A × |Vwind - Vice| × (Vwind - Vice)`
 
-    final_direction = degrees(
-        atan2(
-            final_vy,
-            final_vx
-        )
-    )
+### Net force
 
-    if final_direction < 0:
+`F_net = F_water + F_wind`
 
-        final_direction += 360
+### Acceleration
 
+`a = F_net / m`
 
-    # ========================================================
-    # DISPLACEMENT
-    # ========================================================
+### Velocity
 
-    displacement = sqrt(
+`V_new = V_old + a × Δt`
 
-        (final_x - iceberg.x0) ** 2
+### Position
 
-        + (final_y - iceberg.y0) ** 2
-    )
+`X_new = X_old + Vx_new × Δt`
 
+`Y_new = Y_old + Vy_new × Δt`
 
-    # ========================================================
-    # HEADER
-    # ========================================================
+### Displacement
 
-    st.success(
-        "✅ Simulation completed successfully!"
-    )
+`D = √((X_final-X_initial)² + (Y_final-Y_initial)²)`
 
+### Direction
 
-    # ========================================================
-    # PHYSICAL PARAMETERS
-    # ========================================================
+`θ = atan2(Y_final-Y_initial, X_final-X_initial)`
+"""
+)
 
-    st.header(
-        "📊 Iceberg Physical Parameters"
-    )
-
-    col1, col2, col3 = st.columns(3)
-
-    col1.metric(
-        "Mass",
-        f"{iceberg.mass:,.2f} kg"
-    )
-
-    col2.metric(
-        "Volume",
-        f"{iceberg.volume:,.2f} m³"
-    )
-
-    col3.metric(
-        "Submerged Volume",
-        f"{iceberg.submerged_volume:,.2f} m³"
-    )
-
-
-    col1, col2, col3 = st.columns(3)
-
-    col1.metric(
-        "Submerged Fraction",
-        f"{iceberg.submerged_fraction:.4f}"
-    )
-
-    col2.metric(
-        "Weight",
-        f"{iceberg.weight:,.2f} N"
-    )
-
-    col3.metric(
-        "Buoyant Force",
-        f"{iceberg.buoyant_force:,.2f} N"
-    )
-
-
-    # ========================================================
-    # POSITION
-    # ========================================================
-
-    st.header(
-        "📍 Final Position"
-    )
-
-    col1, col2, col3 = st.columns(3)
-
-    col1.metric(
-        "Final X",
-        f"{final_x:.3f} m"
-    )
-
-    col2.metric(
-        "Final Y",
-        f"{final_y:.3f} m"
-    )
-
-    col3.metric(
-        "Displacement",
-        f"{displacement:.3f} m"
-    )
-
-
-    # ========================================================
-    # VELOCITY
-    # ========================================================
-
-    st.header(
-        "🚀 Final Velocity"
-    )
-
-    col1, col2, col3 = st.columns(3)
-
-    col1.metric(
-        "Vx",
-        f"{final_vx:.6f} m/s"
-    )
-
-    col2.metric(
-        "Vy",
-        f"{final_vy:.6f} m/s"
-    )
-
-    col3.metric(
-        "Speed",
-        f"{final_speed:.6f} m/s"
-    )
-
-    st.info(
-        f"""
-        **Final Direction:** {final_direction:.3f}°
-
-        0° = East  
-        90° = North  
-        180° = West  
-        270° = South
-        """
-    )
-
-
-    # ========================================================
-    # SIMULATION INFORMATION
-    # ========================================================
-
-    st.caption(
-        f"Simulation time: {times[-1]:.3f} seconds | "
-        f"RK4 steps: {len(times) - 1:,}"
-    )
-
-
-    # ========================================================
-    # TRAJECTORY GRAPH
-    # ========================================================
-
-    st.header(
-        "🧭 Iceberg Trajectory"
-    )
-
-    x = states[:, 0]
-
-    y = states[:, 1]
-
-    fig1, ax1 = plt.subplots(
-        figsize=(10, 6)
-    )
-
-    ax1.plot(
-        x,
-        y,
-        linewidth=2,
-        label="Iceberg Path"
-    )
-
-    ax1.scatter(
-        iceberg.x0,
-        iceberg.y0,
-        s=100,
-        marker="o",
-        label="Initial Position"
-    )
-
-    ax1.scatter(
-        x[-1],
-        y[-1],
-        s=120,
-        marker="X",
-        label="Final Position"
-    )
-
-    ax1.set_title(
-        "ICEBERG TRAJECTORY"
-    )
-
-    ax1.set_xlabel(
-        "X Position (m)"
-    )
-
-    ax1.set_ylabel(
-        "Y Position (m)"
-    )
-
-    ax1.grid(True)
-
-    ax1.legend()
-
-    ax1.set_aspect(
-        "equal",
-        adjustable="datalim"
-    )
-
-    st.pyplot(
-        fig1,
-        clear_figure=True
-    )
-
-    plt.close(fig1)
-
-
-    # ========================================================
-    # SPEED VS TIME
-    # ========================================================
-
-    st.header(
-        "⚡ Speed vs Time"
-    )
-
-    vx = states[:, 2]
-
-    vy = states[:, 3]
-
-    speed = np.sqrt(
-        vx**2 + vy**2
-    )
-
-    fig2, ax2 = plt.subplots(
-        figsize=(10, 5)
-    )
-
-    ax2.plot(
-        times,
-        speed,
-        linewidth=2
-    )
-
-    ax2.set_title(
-        "ICEBERG SPEED VS TIME"
-    )
-
-    ax2.set_xlabel(
-        "Time (s)"
-    )
-
-    ax2.set_ylabel(
-        "Speed (m/s)"
-    )
-
-    ax2.grid(True)
-
-    st.pyplot(
-        fig2,
-        clear_figure=True
-    )
-
-    plt.close(fig2)
-
-
-    # ========================================================
-    # VELOCITY COMPONENTS
-    # ========================================================
-
-    st.header(
-        "📈 Velocity Components"
-    )
-
-    fig3, ax3 = plt.subplots(
-        figsize=(10, 5)
-    )
-
-    ax3.plot(
-        times,
-        vx,
-        label="Vx"
-    )
-
-    ax3.plot(
-        times,
-        vy,
-        label="Vy"
-    )
-
-    ax3.set_title(
-        "VELOCITY COMPONENTS"
-    )
-
-    ax3.set_xlabel(
-        "Time (s)"
-    )
-
-    ax3.set_ylabel(
-        "Velocity (m/s)"
-    )
-
-    ax3.grid(True)
-
-    ax3.legend()
-
-    st.pyplot(
-        fig3,
-        clear_figure=True
-    )
-
-    plt.close(fig3)
-
-
-    # ========================================================
-    # COLORED PATH
-    # ========================================================
-
-    st.header(
-        "🌈 Iceberg Path Colored by Time"
-    )
-
-    fig4, ax4 = plt.subplots(
-        figsize=(10, 6)
-    )
-
-    scatter = ax4.scatter(
-        x,
-        y,
-        c=times,
-        cmap="viridis",
-        s=15
-    )
-
-    ax4.scatter(
-        x[0],
-        y[0],
-        s=100,
-        marker="o",
-        label="Start"
-    )
-
-    ax4.scatter(
-        x[-1],
-        y[-1],
-        s=120,
-        marker="X",
-        label="End"
-    )
-
-    ax4.set_title(
-        "ICEBERG PATH COLORED BY TIME"
-    )
-
-    ax4.set_xlabel(
-        "X Position (m)"
-    )
-
-    ax4.set_ylabel(
-        "Y Position (m)"
-    )
-
-    ax4.grid(True)
-
-    ax4.legend()
-
-    ax4.set_aspect(
-        "equal",
-        adjustable="datalim"
-    )
-
-    fig4.colorbar(
-        scatter,
-        ax=ax4,
-        label="Time (s)"
-    )
-
-    st.pyplot(
-        fig4,
-        clear_figure=True
-    )
-
-    plt.close(fig4)
-
-
-    # ========================================================
-    # FORCE INFORMATION
-    # ========================================================
-
-    st.header(
-        "💨 Forces at Final Time"
-    )
-
-    final_forces = force_history[-1]
-
-
-    # --------------------------------------------------------
-    # Water Drag
-    # --------------------------------------------------------
-
-    force_col1, force_col2 = st.columns(2)
-
-    with force_col1:
-
-        st.subheader(
-            "🌊 Water Drag"
-        )
-
-        st.write(
-            f"X = "
-            f"{final_forces['water_drag'][0]:,.3f} N"
-        )
-
-        st.write(
-            f"Y = "
-            f"{final_forces['water_drag'][1]:,.3f} N"
-        )
-
-
-        st.subheader(
-            "🌬️ Wind Force"
-        )
-
-        st.write(
-            f"X = "
-            f"{final_forces['wind_force'][0]:,.3f} N"
-        )
-
-        st.write(
-            f"Y = "
-            f"{final_forces['wind_force'][1]:,.3f} N"
-        )
-
-
-    # --------------------------------------------------------
-    # Coriolis + Total Force
-    # --------------------------------------------------------
-
-    with force_col2:
-
-        st.subheader(
-            "🌍 Coriolis Force"
-        )
-
-        st.write(
-            f"X = "
-            f"{final_forces['coriolis_force'][0]:,.3f} N"
-        )
-
-        st.write(
-            f"Y = "
-            f"{final_forces['coriolis_force'][1]:,.3f} N"
-        )
-
-
-        st.subheader(
-            "⚡ Total Force"
-        )
-
-        st.write(
-            f"X = "
-            f"{final_forces['total_force'][0]:,.3f} N"
-        )
-
-        st.write(
-            f"Y = "
-            f"{final_forces['total_force'][1]:,.3f} N"
-        )
-
-
-else:
-
-    # ========================================================
-    # BEFORE SIMULATION
-    # ========================================================
-
-    st.info(
-        """
-        👈 Enter the iceberg parameters in the sidebar.
-
-        Then click **🚀 Run Simulation** to calculate
-        the iceberg trajectory.
-        """
-    )
+st.caption(
+    "Note: This is a simplified 2D engineering simulation. "
+    "Real iceberg motion can also depend on waves, ocean currents varying "
+    "with depth, Coriolis force, rotational dynamics, iceberg shape, "
+    "keel geometry, wave radiation, and sea-ice interactions."
+)
 
