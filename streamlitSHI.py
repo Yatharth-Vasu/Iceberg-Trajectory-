@@ -6,7 +6,7 @@ import urllib.parse
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 import streamlit as st
-import plotly.graph_objects as go
+
 
 # --- CONFIGURATION & CONSTANTS ---
 MAP_W, MAP_H = 1000.0, 650.0
